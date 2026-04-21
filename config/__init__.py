@@ -9,8 +9,11 @@ This is where we keep connection details and other settings, such as:
 
 from .config import (
     AppConfig,
+    apply_detection_response_to_config,
     apply_motion_response_to_config,
     apply_network_response_to_config,
+    apply_system_network_response_to_config,
+    apply_vision_classes_response_to_config,
     get_config,
     load_config,
     save_config,
@@ -18,8 +21,11 @@ from .config import (
 
 __all__ = [
     "AppConfig",
+    "apply_detection_response_to_config",
     "apply_motion_response_to_config",
     "apply_network_response_to_config",
+    "apply_system_network_response_to_config",
+    "apply_vision_classes_response_to_config",
     "get_config",
     "load_config",
     "save_config",

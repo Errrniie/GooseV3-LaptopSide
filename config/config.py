@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
-from typing import Any, Dict
+import copy
+from typing import Any, Dict, List
 
 
 @dataclass
 class AppConfig:
     """
-    Local snapshot of Jetson connection, network, and motion settings.
-    Synced from GET /config/network and GET /config/motion via the GUI.
+    Local snapshot of Jetson connection, network, motion, vision/tracking, and detection.
     """
 
     # Core Jetson connection (laptop → Jetson HTTP)
@@ -25,7 +25,7 @@ class AppConfig:
     esp32_ip: str = "192.168.8.186"
     laptop_ip: str = ""
 
-    # Motion (from GET /config/motion)
+    # Motion + vision / tracking (GET/POST /config/motion; response may use current/updated)
     x_min: float = 0.0
     x_max: float = 11.5
     y_min: float = 0.0
@@ -36,9 +36,32 @@ class AppConfig:
     neutral_y: float = 3.8
     neutral_z: float = 3.0
     travel_speed: float = 4000.0
-    z_speed: float = 5.0
-    send_rate_hz: float = 10.0
-    feedrate_multiplier: float = 2.0
+    # MOVE_Z macro V (mm/s or server units); POST /config/motion as move_z_velocity
+    move_z_velocity: float = 2.5
+
+    camera_width: int = 1920
+    camera_height: int = 1080
+    detection_confidence_threshold: float = 0.6
+    tracking_kp: float = 0.003
+    tracking_ki: float = 0.0
+    tracking_integral_max_px: int = 400
+    tracking_deadzone_px: int = 30
+    tracking_min_step_mm: float = 0.05
+    tracking_max_step_mm: float = 3.0
+    tracking_target_lost_frames: int = 5
+    search_step_mm: float = 1.0
+    vision_staleness_s: float = 0.5
+
+    # Last GET /system/network snapshot (Jetson IP, peer, stream port, control_api_port, …)
+    system_network: Dict[str, Any] = field(default_factory=dict)
+
+    # GET/POST /config/detection — arbitrary JSON blob
+    detection: Dict[str, Any] = field(default_factory=dict)
+
+    # GET/POST /config/vision/classes — YOLO class whitelist + per-class conf thresholds
+    vision_classes_include: List[int] = field(default_factory=list)
+    vision_classes_exclude: List[int] = field(default_factory=list)
+    vision_class_thresholds: Dict[str, float] = field(default_factory=dict)
 
 
 _CONFIG: AppConfig | None = None
@@ -46,6 +69,42 @@ _CONFIG: AppConfig | None = None
 
 def _default_config_path() -> Path:
     return Path(__file__).with_name("config.json")
+
+
+def _detection_from_dict(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return copy.deepcopy(raw)
+    return {}
+
+
+def _system_network_from_dict(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return copy.deepcopy(raw)
+    return {}
+
+
+def _int_id_list(raw: Any) -> List[int]:
+    if not isinstance(raw, list):
+        return []
+    out: List[int] = []
+    for x in raw:
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _class_thresholds_from_dict(raw: Any) -> Dict[str, float]:
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, float] = {}
+    for k, v in raw.items():
+        try:
+            out[str(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _config_from_dict(data: Dict[str, Any]) -> AppConfig:
@@ -69,10 +128,47 @@ def _config_from_dict(data: Dict[str, Any]) -> AppConfig:
         neutral_y=float(d.get("neutral_y", AppConfig.neutral_y)),
         neutral_z=float(d.get("neutral_z", AppConfig.neutral_z)),
         travel_speed=float(d.get("travel_speed", AppConfig.travel_speed)),
-        z_speed=float(d.get("z_speed", AppConfig.z_speed)),
-        send_rate_hz=float(d.get("send_rate_hz", AppConfig.send_rate_hz)),
-        feedrate_multiplier=float(
-            d.get("feedrate_multiplier", AppConfig.feedrate_multiplier)
+        move_z_velocity=float(
+            d.get(
+                "move_z_velocity",
+                d.get("z_speed", AppConfig.move_z_velocity),
+            )
+        ),
+        camera_width=int(d.get("camera_width", AppConfig.camera_width)),
+        camera_height=int(d.get("camera_height", AppConfig.camera_height)),
+        detection_confidence_threshold=float(
+            d.get(
+                "detection_confidence_threshold",
+                AppConfig.detection_confidence_threshold,
+            )
+        ),
+        tracking_kp=float(d.get("tracking_kp", AppConfig.tracking_kp)),
+        tracking_ki=float(d.get("tracking_ki", AppConfig.tracking_ki)),
+        tracking_integral_max_px=int(
+            d.get("tracking_integral_max_px", AppConfig.tracking_integral_max_px)
+        ),
+        tracking_deadzone_px=int(
+            d.get("tracking_deadzone_px", AppConfig.tracking_deadzone_px)
+        ),
+        tracking_min_step_mm=float(
+            d.get("tracking_min_step_mm", AppConfig.tracking_min_step_mm)
+        ),
+        tracking_max_step_mm=float(
+            d.get("tracking_max_step_mm", AppConfig.tracking_max_step_mm)
+        ),
+        tracking_target_lost_frames=int(
+            d.get("tracking_target_lost_frames", AppConfig.tracking_target_lost_frames)
+        ),
+        search_step_mm=float(d.get("search_step_mm", AppConfig.search_step_mm)),
+        vision_staleness_s=float(
+            d.get("vision_staleness_s", AppConfig.vision_staleness_s)
+        ),
+        system_network=_system_network_from_dict(d.get("system_network")),
+        detection=_detection_from_dict(d.get("detection")),
+        vision_classes_include=_int_id_list(d.get("vision_classes_include")),
+        vision_classes_exclude=_int_id_list(d.get("vision_classes_exclude")),
+        vision_class_thresholds=_class_thresholds_from_dict(
+            d.get("vision_class_thresholds")
         ),
     )
 
@@ -115,9 +211,24 @@ def _save_config_to_file(cfg: AppConfig, path: Path) -> None:
         "neutral_y": cfg.neutral_y,
         "neutral_z": cfg.neutral_z,
         "travel_speed": cfg.travel_speed,
-        "z_speed": cfg.z_speed,
-        "send_rate_hz": cfg.send_rate_hz,
-        "feedrate_multiplier": cfg.feedrate_multiplier,
+        "move_z_velocity": cfg.move_z_velocity,
+        "camera_width": cfg.camera_width,
+        "camera_height": cfg.camera_height,
+        "detection_confidence_threshold": cfg.detection_confidence_threshold,
+        "tracking_kp": cfg.tracking_kp,
+        "tracking_ki": cfg.tracking_ki,
+        "tracking_integral_max_px": cfg.tracking_integral_max_px,
+        "tracking_deadzone_px": cfg.tracking_deadzone_px,
+        "tracking_min_step_mm": cfg.tracking_min_step_mm,
+        "tracking_max_step_mm": cfg.tracking_max_step_mm,
+        "tracking_target_lost_frames": cfg.tracking_target_lost_frames,
+        "search_step_mm": cfg.search_step_mm,
+        "vision_staleness_s": cfg.vision_staleness_s,
+        "system_network": copy.deepcopy(cfg.system_network),
+        "detection": copy.deepcopy(cfg.detection),
+        "vision_classes_include": list(cfg.vision_classes_include),
+        "vision_classes_exclude": list(cfg.vision_classes_exclude),
+        "vision_class_thresholds": copy.deepcopy(cfg.vision_class_thresholds),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -157,10 +268,22 @@ def apply_network_response_to_config(cfg: AppConfig, data: Dict[str, Any]) -> No
         cfg.camera_port = int(data["stream_port"])
 
 
+def _motion_source_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Prefer \"current\", then \"updated\", then flat body from motion responses."""
+    cur = data.get("current")
+    if isinstance(cur, dict):
+        return cur
+    upd = data.get("updated")
+    if isinstance(upd, dict):
+        return upd
+    return data
+
+
 def apply_motion_response_to_config(cfg: AppConfig, data: Dict[str, Any]) -> None:
-    """Merge GET /config/motion JSON into cfg (only keys that are present)."""
+    """Merge GET /config/motion (or {current, updated}) into cfg."""
     if not isinstance(data, dict):
         return
+    data = _motion_source_dict(data)
     float_keys = (
         "x_min",
         "x_max",
@@ -172,13 +295,62 @@ def apply_motion_response_to_config(cfg: AppConfig, data: Dict[str, Any]) -> Non
         "neutral_y",
         "neutral_z",
         "travel_speed",
-        "z_speed",
-        "send_rate_hz",
-        "feedrate_multiplier",
+        "move_z_velocity",
+        "detection_confidence_threshold",
+        "tracking_kp",
+        "tracking_ki",
+        "tracking_min_step_mm",
+        "tracking_max_step_mm",
+        "search_step_mm",
+        "vision_staleness_s",
+    )
+    int_keys = (
+        "camera_width",
+        "camera_height",
+        "tracking_deadzone_px",
+        "tracking_integral_max_px",
+        "tracking_target_lost_frames",
     )
     for key in float_keys:
         if key in data and data[key] is not None:
             setattr(cfg, key, float(data[key]))
+    for key in int_keys:
+        if key in data and data[key] is not None:
+            setattr(cfg, key, int(data[key]))
+
+
+def apply_detection_response_to_config(cfg: AppConfig, data: Dict[str, Any]) -> None:
+    """
+    Merge GET /config/detection (or a nested \"detection\" object) into cfg.detection.
+    """
+    if not isinstance(data, dict):
+        return
+    if "detection" in data and isinstance(data["detection"], dict):
+        cfg.detection = {**cfg.detection, **copy.deepcopy(data["detection"])}
+    else:
+        cfg.detection = {**cfg.detection, **copy.deepcopy(data)}
+
+
+def apply_system_network_response_to_config(cfg: AppConfig, data: Dict[str, Any]) -> None:
+    """Store GET /system/network JSON for display (optional stream/control hints)."""
+    if not isinstance(data, dict):
+        return
+    cfg.system_network = copy.deepcopy(data)
+
+
+def apply_vision_classes_response_to_config(cfg: AppConfig, data: Dict[str, Any]) -> None:
+    """Merge GET /config/vision/classes into cfg (include, exclude, class_thresholds)."""
+    if not isinstance(data, dict):
+        return
+    if "include" in data and isinstance(data["include"], list):
+        cfg.vision_classes_include = _int_id_list(data["include"])
+    if "exclude" in data and isinstance(data["exclude"], list):
+        cfg.vision_classes_exclude = _int_id_list(data["exclude"])
+    thr = data.get("class_thresholds")
+    if thr is None:
+        thr = data.get("thresholds")
+    if isinstance(thr, dict):
+        cfg.vision_class_thresholds = _class_thresholds_from_dict(thr)
 
 
 __all__ = [
@@ -188,4 +360,7 @@ __all__ = [
     "save_config",
     "apply_network_response_to_config",
     "apply_motion_response_to_config",
+    "apply_detection_response_to_config",
+    "apply_system_network_response_to_config",
+    "apply_vision_classes_response_to_config",
 ]
