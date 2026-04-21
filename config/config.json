@@ -1,0 +1,23 @@
+{
+  "jetson_ip": "192.168.8.147",
+  "api_port": 8000,
+  "camera_port": 5000,
+  "moonraker_host": "192.168.8.146",
+  "moonraker_port": 7125,
+  "moonraker_path": "",
+  "esp32_ip": "192.168.8.186",
+  "laptop_ip": "192.168.8.154",
+  "x_min": 0.0,
+  "x_max": 11.5,
+  "y_min": 0.0,
+  "y_max": 7.6,
+  "z_min": 0.0,
+  "z_max": 7.0,
+  "neutral_x": 5.75,
+  "neutral_y": 3.8,
+  "neutral_z": 3.0,
+  "travel_speed": 3000.0,
+  "z_speed": 5.0,
+  "send_rate_hz": 10.0,
+  "feedrate_multiplier": 2.0
+}
